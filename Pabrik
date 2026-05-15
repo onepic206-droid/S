@@ -1,12 +1,13 @@
--- AUTO PABRIK ADVANCE MULTI BOT FINAL
--- LOOP SELAMANYA
--- KICK / #MENU -> RECONNECT -> WARP FARM
--- ROW KOSONG -> PLANT
--- ADA BLOCK -> PNB SAMPAI HABIS
--- HARVEST -> LANGSUNG PLANT PER TILE
+-- AUTO PABRIK ADVANCE MULTI BOT
+-- SERVER FULL FIX
+-- CONNECTED + BUKAN #MENU
+-- AUTO RECONNECT SERVER FULL
+-- FORCE RETRY WARP SAMPAI MASUK WORLD
+-- CONFIG DELAY BREAK / PLACE / JUMLAH BLOCK PNB
 
 local CONFIG = {
     FARM_WORLD = "NOLES:AB",
+    SAVE_WORLD = "NOLES:AB",
 
     ITEM_ID = 5,
 
@@ -14,8 +15,8 @@ local CONFIG = {
     START_Y = 9,
     BOT_Y_STEP = 4,
 
-    DROP_X = 2,
-    DROP_Y = 1,
+    DROP_X = 3,
+    DROP_Y = 12,
 
     KEEP_SEED = 50,
 
@@ -26,17 +27,20 @@ local CONFIG = {
         1134
     },
 
-    PNB_BLOCK_COUNT = 3,
-    PNB_HIT_ROUND = 3,
+    PNB_TILE_COUNT = 4,
 
-    PLACE_DELAY_MIN = 400,
-    PLACE_DELAY_MAX = 600,
+    PLACE_DELAY_MIN = 200,
+    PLACE_DELAY_MAX = 250,
 
-    HIT_DELAY_MIN = 300,
-    HIT_DELAY_MAX = 500,
+    HIT_DELAY_MIN = 200,
+    HIT_DELAY_MAX = 260,
 
-    HARVEST_HIT_DELAY = 250,
-    PLANT_DELAY = 250,
+    HIT_ROUND = 3,
+
+    HARVEST_HIT_DELAY = 300,
+    HARVEST_MAX_HIT = 10,
+
+    PLANT_DELAY = 300,
 
     PATH_TIMEOUT = 8000,
     COLLECT_RANGE = 6,
@@ -110,6 +114,7 @@ local function warpUntilEnter(bot, worldName)
         ensureConnected(bot)
 
         if nav(bot) == target then
+            log(bot, "Already in " .. target)
             return true
         end
 
@@ -132,6 +137,7 @@ local function warpUntilEnter(bot, worldName)
             end
 
             if isServerFull(bot) then
+                log(bot, "Server full -> reconnect")
                 break
             end
 
@@ -139,7 +145,7 @@ local function warpUntilEnter(bot, worldName)
             t = t + 500
         end
 
-        log(bot, "Retry warp")
+        log(bot, "Not entered world -> retry warp")
 
         pcall(function()
             bot:disconnect()
@@ -155,23 +161,8 @@ local function warpUntilEnter(bot, worldName)
     end
 end
 
-local function forceFarm(bot)
-    while true do
-        ensureConnected(bot)
-
-        if nav(bot) == worldOnly(CONFIG.FARM_WORLD) then
-            return true
-        end
-
-        warpUntilEnter(bot, CONFIG.FARM_WORLD)
-        sleep(1000)
-    end
-end
-
 local function pathTo(bot, pos)
     if not bot or not pos then return false end
-
-    forceFarm(bot)
 
     local p = bot:point()
     if p and p.x == pos.x and p.y == pos.y then
@@ -184,12 +175,8 @@ local function pathTo(bot, pos)
     end
 
     local t = 0
-    while bot:pathfinding() and t < CONFIG.PATH_TIMEOUT do
-        if nav(bot) == "#MENU" then
-            forceFarm(bot)
-            return false
-        end
 
+    while bot:pathfinding() and t < CONFIG.PATH_TIMEOUT do
         sleep(25)
         t = t + 25
     end
@@ -255,8 +242,6 @@ local function setupBot(bot)
 end
 
 local function collectNearby(bot, center)
-    forceFarm(bot)
-
     local world = bot:world()
     if not world or not center then return end
 
@@ -297,126 +282,44 @@ local function canPlant(world, x, y)
     return tile.foreground == 0 and below.foreground ~= 0
 end
 
-local function rowHasTree(bot, rowY)
-    forceFarm(bot)
-
-    local world = bot:world()
-    if not world then return false end
-
-    for x = 1, world.size.x - 2 do
-        local tile = world:tile(Vector2i.new(x, rowY))
-
-        if tile and tile.foreground ~= 0 then
-            return true
-        end
-    end
-
-    return false
-end
-
-local function plantOne(bot, x, y)
-    forceFarm(bot)
-
-    local inv = bot:inventory()
-    if not inv then return false end
-
-    local seed = inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
-    if seed <= 0 then return false end
-
-    local pos = Vector2i.new(x, y)
-
-    for i = 1, 5 do
-        forceFarm(bot)
-
-        local world = bot:world()
-
-        if world and canPlant(world, x, y) then
-            pathTo(bot, pos)
-
-            pcall(function()
-                bot:place(pos, CONFIG.ITEM_ID, InventoryItemType.seed)
-            end)
-
-            sleep(CONFIG.PLANT_DELAY)
-            return true
-        end
-
-        sleep(250)
-    end
-
-    return false
-end
-
-local function plantEmptyRow(bot, rowY)
-    forceFarm(bot)
-
+local function harvestPlantRow(bot, rowY)
     local world = bot:world()
     local inv = bot:inventory()
+
     if not world or not inv then return end
 
-    local seed = inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
-    if seed <= 0 then return end
-
-    log(bot, "Plant empty row -> " .. rowY)
-
     for x = 1, world.size.x - 2 do
-        forceFarm(bot)
-
-        inv = bot:inventory()
-        seed = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
-        if seed <= 0 then return end
-
-        plantOne(bot, x, rowY)
-        sleep(20)
-    end
-end
-
-local function harvestPlantRow(bot, rowY)
-    forceFarm(bot)
-
-    local world = bot:world()
-    if not world then return end
-
-    log(bot, "Harvest + instant plant row -> " .. rowY)
-
-    for x = 1, world.size.x - 2 do
-        forceFarm(bot)
-
-        world = bot:world()
-        if not world then return end
-
         local pos = Vector2i.new(x, rowY)
         local tile = world:tile(pos)
 
         if isHarvestable(tile) then
-            pathTo(bot, pos)
+            if not pathTo(bot, pos) then
+                goto continue
+            end
 
             local hitCount = 0
 
-            while hitCount < 10 do
-                forceFarm(bot)
-
-                world = bot:world()
-                tile = world and world:tile(pos)
-
-                if not tile or tile.foreground == 0 then
-                    break
-                end
-
-                pcall(function()
-                    bot:hit(pos)
-                end)
-
+            while tile and tile.foreground ~= 0 and hitCount < CONFIG.HARVEST_MAX_HIT do
+                bot:hit(pos)
                 sleep(CONFIG.HARVEST_HIT_DELAY)
+
                 hitCount = hitCount + 1
+                tile = world:tile(pos)
             end
 
             collectNearby(bot, pos)
-            sleep(400)
 
-            plantOne(bot, x, rowY)
+            inv = bot:inventory()
+
+            if inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) > 0 then
+                if canPlant(world, x, rowY) then
+                    bot:place(pos, CONFIG.ITEM_ID, InventoryItemType.seed)
+                    sleep(CONFIG.PLANT_DELAY)
+                end
+            end
         end
 
+        ::continue::
         sleep(20)
     end
 end
@@ -425,24 +328,23 @@ local function makePnbTiles(bot)
     local p = bot:point()
     local tiles = {}
 
-    local half = math.floor(CONFIG.PNB_BLOCK_COUNT / 2)
+    local count = CONFIG.PNB_TILE_COUNT
+    local half = math.floor(count / 2)
 
-    for i = 0, CONFIG.PNB_BLOCK_COUNT - 1 do
-        local y = p.y - half + i
-        table.insert(tiles, Vector2i.new(p.x - 1, y))
+    for i = -half, half do
+        if #tiles < count then
+            table.insert(tiles, Vector2i.new(p.x - 1, p.y + i))
+        end
     end
 
     return tiles
 end
 
 local function pnb(bot, start)
-    log(bot, "PNB start")
-
-    forceFarm(bot)
     goToTile(bot, start.x, start.y)
 
     while true do
-        forceFarm(bot)
+        ensureConnected(bot)
 
         local inv = bot:inventory()
         if not inv then return end
@@ -459,79 +361,44 @@ local function pnb(bot, start)
         local tiles = makePnbTiles(bot)
 
         for _, pos in ipairs(tiles) do
-            forceFarm(bot)
-
-            pcall(function()
-                bot:place(pos, CONFIG.ITEM_ID, InventoryItemType.block)
-            end)
-
+            bot:place(pos, CONFIG.ITEM_ID, InventoryItemType.block)
             rsleep(CONFIG.PLACE_DELAY_MIN, CONFIG.PLACE_DELAY_MAX)
         end
 
-        for i = 1, CONFIG.PNB_HIT_ROUND do
+        for i = 1, CONFIG.HIT_ROUND do
             for _, pos in ipairs(tiles) do
-                forceFarm(bot)
-
-                pcall(function()
-                    bot:hit(pos)
-                end)
-
+                bot:hit(pos)
                 rsleep(CONFIG.HIT_DELAY_MIN, CONFIG.HIT_DELAY_MAX)
             end
         end
 
         collectNearby(bot, bot:point())
-        sleep(250)
+        sleep(150)
     end
 end
 
 local function dropItem(bot, id, invType, amount)
     if amount and amount > 0 then
-        log(bot, "Drop -> " .. id .. " x" .. amount)
-
         pcall(function()
             bot:drop(id, invType, amount)
         end)
 
-        sleep(700)
+        sleep(600)
     end
-end
-
-local function hasDropItem(bot)
-    local inv = bot:inventory()
-    if not inv then return false end
-
-    local seed = inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
-
-    if seed > CONFIG.KEEP_SEED then
-        return true
-    end
-
-    for _, id in pairs(CONFIG.EXCLUSIVE_CONSUMABLE) do
-        local amount = inv:count(id, InventoryItemType.consumable) or 0
-
-        if amount > 0 then
-            return true
-        end
-    end
-
-    return false
 end
 
 local function dropExtra(bot, start)
-    forceFarm(bot)
-
-    if not hasDropItem(bot) then
-        return
-    end
-
-    log(bot, "Drop extra at farm")
+    warpUntilEnter(bot, CONFIG.SAVE_WORLD)
 
     goToTile(bot, CONFIG.DROP_X, CONFIG.DROP_Y)
     sleep(700)
 
     local inv = bot:inventory()
-    if not inv then return end
+
+    if not inv then
+        warpUntilEnter(bot, CONFIG.FARM_WORLD)
+        return
+    end
 
     local seed = inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
 
@@ -545,8 +412,6 @@ local function dropExtra(bot, start)
     end
 
     for _, id in pairs(CONFIG.EXCLUSIVE_CONSUMABLE) do
-        forceFarm(bot)
-
         inv = bot:inventory()
 
         local amount = inv and inv:count(id, InventoryItemType.consumable) or 0
@@ -563,16 +428,20 @@ local function dropExtra(bot, start)
 
     sleep(800)
 
+    warpUntilEnter(bot, CONFIG.FARM_WORLD)
+
     if start then
         goToTile(bot, start.x, start.y)
     end
 end
 
 local function waitTreeReady(bot, rowY)
-    log(bot, "Wait tree ready row -> " .. rowY)
-
     while true do
-        forceFarm(bot)
+        ensureConnected(bot)
+
+        if nav(bot) ~= worldOnly(CONFIG.FARM_WORLD) then
+            warpUntilEnter(bot, CONFIG.FARM_WORLD)
+        end
 
         local world = bot:world()
 
@@ -592,28 +461,24 @@ end
 
 local function botThread(bot)
     setupBot(bot)
+    ensureConnected(bot)
+
+    local start = getStartPos(bot)
+    local rowY = start.y
+
+    warpUntilEnter(bot, CONFIG.FARM_WORLD)
+    goToTile(bot, start.x, start.y)
 
     while true do
-        forceFarm(bot)
+        ensureConnected(bot)
 
-        local start = getStartPos(bot)
-        local rowY = start.y
+        start = getStartPos(bot)
+        rowY = start.y
 
-        log(bot, "Cycle start -> row " .. rowY)
-
+        warpUntilEnter(bot, CONFIG.FARM_WORLD)
         goToTile(bot, start.x, start.y)
 
-        if not rowHasTree(bot, rowY) then
-            plantEmptyRow(bot, rowY)
-            goToTile(bot, start.x, start.y)
-        end
-
-        local inv = bot:inventory()
-        local block = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.block) or 0
-
-        if block > 0 then
-            pnb(bot, start)
-        end
+        pnb(bot, start)
 
         collectNearby(bot, bot:point())
 
@@ -626,8 +491,6 @@ local function botThread(bot)
         dropExtra(bot, start)
 
         waitTreeReady(bot, rowY)
-
-        log(bot, "Cycle done")
 
         sleep(CONFIG.mainDelay)
     end
