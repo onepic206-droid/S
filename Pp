@@ -22,7 +22,11 @@ local CONFIG = {
     KEEP_SEED = 25,
 
     EXCLUSIVE = {
-        ,
+        3364,
+        3365,
+        3366,
+        1137,
+        1136
     },
 
     MOVE_DELAY = 1200,
@@ -31,12 +35,12 @@ local CONFIG = {
 
     HIT_DELAY = 180,
     PLACE_DELAY = 160,
-    COLLECT_DELAY = 120,
+    COLLECT_DELAY = 180,
 
     LOOP_DELAY = 3000,
     READY_WAIT = 20000,
 
-    COLLECT_RADIUS = 2,
+    COLLECT_RADIUS = 3,
 }
 
 local running = {}
