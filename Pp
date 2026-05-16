@@ -1,103 +1,112 @@
--- AUTO PABRIK ADVANCE SIMPLE FINAL
--- PNB: 3 block samping kiri player
--- Collect: area sekitar player
-
 local CONFIG = {
-    FARM_WORLD = "NOLES",
-    FARM_DOOR  = "AB",
+    FARM_WORLD = "NOLES:AB",
 
-    SEED_ID  = 3,
-    BLOCK_ID = 3,
+    ITEM_ID = 25,
 
-    SEED_TYPE = "seed",
-    BLOCK_TYPE = "block",
-    EXCLUSIVE_TYPE = "consumable",
-
-    START_X = 1,
+    START_X = 2,
     START_Y = 9,
     BOT_Y_STEP = 4,
 
-    WORLD_WIDTH = 25,
+    DROP_X = 3,
+    DROP_Y = 3,
 
-    KEEP_SEED = 25,
+    KEEP_SEED = 20,
 
-    EXCLUSIVE = {
-        3364,
-        3365,
-        3366,
-        1137,
-        1136
-    },
-
-    MOVE_DELAY = 1200,
-    WARP_DELAY = 5000,
-    PATH_TIMEOUT = 12000,
+    HIT_COUNT = 3,
+    PLACE_COUNT = 3,
 
     HIT_DELAY = 180,
-    PLACE_DELAY = 160,
-    COLLECT_DELAY = 180,
+    PLACE_DELAY = 200,
 
-    LOOP_DELAY = 3000,
-    READY_WAIT = 20000,
+    RAND_MIN = 50,
+    RAND_MAX = 120,
 
-    COLLECT_RADIUS = 3,
+    PATH_TIMEOUT = 3000
 }
 
 local running = {}
 
-local function invCount(bot, id, typ)
-    local inv = bot:inventory()
-    if not inv then return 0 end
-    return inv:count(id, typ)
+local function rsleep()
+    sleep(math.random(CONFIG.RAND_MIN, CONFIG.RAND_MAX))
 end
 
 local function nav(bot)
     local n = bot:navigation()
-    if not n then return "" end
+    if not n then return "#MENU" end
     return tostring(n):upper()
 end
 
-local function targetWorld()
-    return tostring(CONFIG.FARM_WORLD):upper()
+local function worldOnly(world)
+    local s = tostring(world):upper()
+    local p = string.find(s, ":")
+    if p then return string.sub(s, 1, p - 1) end
+    return s
 end
 
-local function warpFarm(bot)
-    local world = targetWorld()
-    local warpName = world
-
-    if CONFIG.FARM_DOOR and CONFIG.FARM_DOOR ~= "" then
-        warpName = world .. ":" .. CONFIG.FARM_DOOR
-    end
-
-    if nav(bot) ~= world then
-        bot:warp(warpName)
-        sleep(CONFIG.WARP_DELAY)
-    end
-
-    return nav(bot) == world
+local function inFarm(bot)
+    local target = worldOnly(CONFIG.FARM_WORLD)
+    return string.find(nav(bot), target, 1, true) ~= nil
 end
 
-local function goTile(bot, x, y)
+local function ensureFarm(bot)
+    while not inFarm(bot) do
+        bot:warp(CONFIG.FARM_WORLD)
+        sleep(4000)
+    end
+end
+
+local function pathTo(bot, x, y)
+    ensureFarm(bot)
+
+    local pos = Vector2i.new(x, y)
     local p = bot:point()
-    if p and p.x == x and p.y == y then return true end
 
-    bot:clearPath()
-    sleep(100)
+    if p and p.x == x and p.y == y then
+        return true
+    end
 
-    local ok = bot:findPath(Vector2i.new(x, y))
+    local ok = bot:findPath(pos)
     if ok == false then return false end
 
     local t = 0
     while bot:pathfinding() and t < CONFIG.PATH_TIMEOUT do
-        sleep(100)
-        t = t + 100
+        sleep(25)
+        t = t + 25
     end
 
-    p = bot:point()
-    return p and p.x == x and p.y == y
+    if t >= CONFIG.PATH_TIMEOUT then
+        pcall(function()
+            bot:clearPath()
+        end)
+        return false
+    end
+
+    return true
 end
 
-local function getBotIndex(target)
+local function collectNearby(bot)
+    local world = bot:world()
+    local p = bot:point()
+
+    if not world or not p then return end
+
+    for _, obj in pairs(world.collectables) do
+        local op = obj:point()
+
+        local dist =
+            math.abs(p.x - op.x) +
+            math.abs(p.y - op.y)
+
+        if dist <= 6 then
+            pcall(function()
+                bot:collect(obj.id)
+            end)
+            sleep(20)
+        end
+    end
+end
+
+local function getRow(bot)
     local bots = {}
 
     for _, b in pairs(getClients()) do
@@ -110,165 +119,220 @@ local function getBotIndex(target)
         return tostring(a.id) < tostring(b.id)
     end)
 
+    local index = 1
+
     for i, b in ipairs(bots) do
-        if b.id == target.id then
-            return i
+        if b.id == bot.id then
+            index = i
+            break
         end
     end
 
-    return 1
+    return CONFIG.START_Y + ((index - 1) * CONFIG.BOT_Y_STEP)
 end
 
-local function getStartPos(bot)
-    local index = getBotIndex(bot)
+local function canPlant(world, x, y)
+    local tile = world:tile(Vector2i.new(x, y))
+    local below = world:tile(Vector2i.new(x, y + 1))
 
-    return {
-        x = CONFIG.START_X,
-        y = CONFIG.START_Y + ((index - 1) * CONFIG.BOT_Y_STEP)
-    }
+    return tile and below and
+           tile.foreground == 0 and
+           below.foreground ~= 0
 end
 
-local function collectNear(bot)
-    local w = bot:world()
-    local p = bot:point()
-    if not w or not p then return end
+local function plant(bot, rowY)
+    local world = bot:world()
+    if not world then return end
 
-    for _, obj in pairs(w.collectables) do
-        if obj then
-            local op = obj:point()
-            if op then
-                if math.abs(op.x - p.x) <= CONFIG.COLLECT_RADIUS and
-                   math.abs(op.y - p.y) <= CONFIG.COLLECT_RADIUS then
-                    pcall(function()
-                        bot:collect(obj.id)
-                    end)
-                    sleep(CONFIG.COLLECT_DELAY)
-                end
-            end
-        end
-    end
-end
+    for x = 1, world.size.x - 2 do
+        local inv = bot:inventory()
+        local seed = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
 
-local function dropExtra(bot)
-    local seed = invCount(bot, CONFIG.SEED_ID, CONFIG.SEED_TYPE)
+        if seed <= 0 then return end
 
-    if seed > CONFIG.KEEP_SEED then
-        bot:drop(CONFIG.SEED_ID, CONFIG.SEED_TYPE, seed - CONFIG.KEEP_SEED)
-        sleep(700)
-    end
+        world = bot:world()
 
-    for _, id in ipairs(CONFIG.EXCLUSIVE) do
-        local c = invCount(bot, id, CONFIG.EXCLUSIVE_TYPE)
-        if c > 0 then
-            bot:drop(id, CONFIG.EXCLUSIVE_TYPE, c)
-            sleep(700)
+        if world and canPlant(world, x, rowY) then
+            pathTo(bot, x, rowY)
+
+            pcall(function()
+                bot:place(
+                    Vector2i.new(x, rowY),
+                    CONFIG.ITEM_ID,
+                    InventoryItemType.seed
+                )
+            end)
+
+            sleep(CONFIG.PLACE_DELAY)
+            rsleep()
         end
     end
 end
 
-local function harvestRow(bot, rowY)
-    local w = bot:world()
-    if not w then return end
+local function harvest(bot, rowY)
+    local world = bot:world()
+    if not world then return end
 
-    for x = 0, CONFIG.WORLD_WIDTH - 1 do
-        local tile = w:tile(Vector2i.new(x, rowY))
-        if tile then
+    for x = 1, world.size.x - 2 do
+        local pos = Vector2i.new(x, rowY)
+
+        world = bot:world()
+        local tile = world and world:tile(pos)
+
+        if tile and tile.foreground ~= 0 then
             local tree = tile:tree()
-            if tree and tree.blockType == CONFIG.SEED_ID and tree:ready() then
-                if goTile(bot, x, rowY) then
-                    bot:hit(Vector2i.new(x, rowY))
+
+            if tree and tree:ready() then
+                pathTo(bot, x, rowY)
+
+                for i = 1, 10 do
+                    world = bot:world()
+                    tile = world and world:tile(pos)
+
+                    if not tile or tile.foreground == 0 then
+                        break
+                    end
+
+                    pcall(function()
+                        bot:hit(pos)
+                    end)
+
                     sleep(CONFIG.HIT_DELAY)
-                    collectNear(bot)
+                    rsleep()
+                end
+
+                collectNearby(bot)
+            end
+        end
+    end
+end
+
+local function pnb(bot, rowY)
+    local inv = bot:inventory()
+    local block = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.block) or 0
+
+    if block <= 0 then return end
+
+    pathTo(bot, CONFIG.START_X, rowY)
+
+    while true do
+        inv = bot:inventory()
+        block = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.block) or 0
+
+        if block <= 0 then break end
+
+        local p = bot:point()
+        if not p then break end
+
+        local tiles = {
+            Vector2i.new(p.x - 1, p.y - 1),
+            Vector2i.new(p.x - 1, p.y),
+            Vector2i.new(p.x - 1, p.y + 1)
+        }
+
+        for placeRound = 1, CONFIG.PLACE_COUNT do
+            for _, pos in pairs(tiles) do
+                inv = bot:inventory()
+                block = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.block) or 0
+
+                if block <= 0 then break end
+
+                local world = bot:world()
+                local tile = world and world:tile(pos)
+
+                if tile and tile.foreground == 0 then
+                    pcall(function()
+                        bot:place(pos, CONFIG.ITEM_ID, InventoryItemType.block)
+                    end)
+
+                    sleep(CONFIG.PLACE_DELAY)
+                    rsleep()
                 end
             end
         end
-    end
-end
 
-local function plantRow(bot, rowY)
-    if invCount(bot, CONFIG.SEED_ID, CONFIG.SEED_TYPE) <= 0 then return end
-
-    local w = bot:world()
-    if not w then return end
-
-    for x = 0, CONFIG.WORLD_WIDTH - 1 do
-        local tile = w:tile(Vector2i.new(x, rowY))
-        local below = w:tile(Vector2i.new(x, rowY + 1))
-
-        if tile and below and tile.foreground == 0 and below.foreground ~= 0 then
-            if goTile(bot, x, rowY) then
-                bot:place(Vector2i.new(x, rowY), CONFIG.SEED_ID, CONFIG.SEED_TYPE)
-                sleep(CONFIG.PLACE_DELAY)
-            end
-        end
-    end
-end
-
-local function pnbRow(bot, rowY)
-    local w = bot:world()
-    if not w then return end
-
-    for x = 1, CONFIG.WORLD_WIDTH - 1 do
-        local standX = x
-        local standY = rowY
-
-        if goTile(bot, standX, standY) then
-            local targets = {
-                Vector2i.new(x - 1, rowY - 1),
-                Vector2i.new(x - 1, rowY),
-                Vector2i.new(x - 1, rowY + 1),
-            }
-
-            for _, pos in ipairs(targets) do
-                local tile = w:tile(pos)
-                if tile and tile.foreground == CONFIG.BLOCK_ID then
+        for hitRound = 1, CONFIG.HIT_COUNT do
+            for _, pos in pairs(tiles) do
+                pcall(function()
                     bot:hit(pos)
-                    sleep(CONFIG.HIT_DELAY)
-                    collectNear(bot)
+                end)
+
+                sleep(CONFIG.HIT_DELAY)
+                rsleep()
+            end
+        end
+
+        collectNearby(bot)
+    end
+end
+
+local function dropSeed(bot, rowY)
+    local inv = bot:inventory()
+    local seed = inv and inv:count(CONFIG.ITEM_ID, InventoryItemType.seed) or 0
+
+    if seed <= CONFIG.KEEP_SEED then return end
+
+    pathTo(bot, CONFIG.DROP_X, CONFIG.DROP_Y)
+
+    pcall(function()
+        bot:drop(
+            CONFIG.ITEM_ID,
+            InventoryItemType.seed,
+            seed - CONFIG.KEEP_SEED
+        )
+    end)
+
+    sleep(1000)
+
+    pathTo(bot, CONFIG.START_X, rowY)
+end
+
+local function waitReady(bot, rowY)
+    while true do
+        ensureFarm(bot)
+
+        local world = bot:world()
+
+        if world then
+            for x = 1, world.size.x - 2 do
+                local tile = world:tile(Vector2i.new(x, rowY))
+
+                if tile and tile.foreground ~= 0 then
+                    local tree = tile:tree()
+
+                    if tree and tree:ready() then
+                        return
+                    end
                 end
             end
         end
+
+        sleep(5000)
     end
 end
 
 local function botThread(bot)
     while true do
-        if not bot or not bot.id then break end
+        ensureFarm(bot)
 
-        if not bot:connected() then
-            bot:connect()
-            sleep(CONFIG.WARP_DELAY)
-        end
+        local rowY = getRow(bot)
 
-        if warpFarm(bot) then
-            local start = getStartPos(bot)
+        pathTo(bot, CONFIG.START_X, rowY)
 
-            if goTile(bot, start.x, start.y) then
-                harvestRow(bot, start.y)
-                collectNear(bot)
+        pnb(bot, rowY)
 
-                plantRow(bot, start.y)
-                collectNear(bot)
+        harvest(bot, rowY)
+        collectNearby(bot)
 
-                pnbRow(bot, start.y)
-                collectNear(bot)
+        plant(bot, rowY)
 
-                goTile(bot, start.x, start.y)
-                dropExtra(bot)
+        pnb(bot, rowY)
 
-                sleep(CONFIG.READY_WAIT)
-            else
-                sleep(CONFIG.LOOP_DELAY)
-            end
-        else
-            sleep(CONFIG.WARP_DELAY)
-        end
+        dropSeed(bot, rowY)
 
-        sleep(CONFIG.LOOP_DELAY)
-    end
+        waitReady(bot, rowY)
 
-    if bot and bot.id then
-        running[bot.id] = nil
+        sleep(1000)
     end
 end
 
@@ -277,11 +341,20 @@ runThread(function()
         for _, bot in pairs(getClients()) do
             if bot and bot.id and not running[bot.id] then
                 running[bot.id] = true
-                runThread(botThread, bot)
-                sleep(CONFIG.MOVE_DELAY)
+
+                runThread(function()
+                    local ok, err = pcall(function()
+                        botThread(bot)
+                    end)
+
+                    print("[BOT " .. tostring(bot.id) .. "] " .. tostring(err))
+                    running[bot.id] = nil
+                end)
+
+                sleep(150)
             end
         end
 
-        sleep(3000)
+        sleep(1000)
     end
 end)
