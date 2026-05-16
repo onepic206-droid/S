@@ -12,15 +12,15 @@ local CONFIG = {
 
     START_X = 1,
     START_Y = 9,
-    BOT_Y_STEP = 3,
+    BOT_Y_STEP = 4,
 
     DROP_X = 3,
-    DROP_Y = 12,
+    DROP_Y = 3,
 
-    KEEP_SEED = 50,
+    KEEP_SEED = 35,
 
     EXCLUSIVE_CONSUMABLE = {
-        3364, 3365, 3366, 1134
+        3364, 3365, 3366, 1137, 1136
     },
 
     PNB_BLOCK_COUNT = 3,
