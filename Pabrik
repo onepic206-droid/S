@@ -19,20 +19,27 @@ local CONFIG = {
     HIT_COUNT = 3,
 
     HIT_DELAY = 180,
-    PLACE_DELAY = 80,
+    PLACE_DELAY = 200,
     TREE_DELAY = 100,
     LOOP_DELAY = 1000,
 
     PATH_TIMEOUT = 8000,
 
     COLLECT_RANGE = 6,
-    COLLECT_DELAY = 20
+    COLLECT_DELAY = 20,
+
+    RAND_MIN = 120,
+    RAND_MAX = 60
 }
 
 getPreferences().collect = true
 getPreferences().collectInterval = 50
 
 local tmpPos = Vector2i.new(0, 0)
+
+local function rsleep()
+    sleep(math.random(CONFIG.RAND_MIN, CONFIG.RAND_MAX))
+end
 
 local function nav()
     local n = client:navigation()
@@ -42,6 +49,7 @@ end
 local function worldOnly(w)
     local s = tostring(w):upper()
     local p = string.find(s, ":")
+
     return p and string.sub(s, 1, p - 1) or s
 end
 
@@ -52,6 +60,7 @@ local function joinWorld()
 
     client:warp(CONFIG.WORLD)
     sleep(5000)
+    rsleep()
 
     return string.find(nav(), worldOnly(CONFIG.WORLD), 1, true) ~= nil
 end
@@ -70,6 +79,8 @@ local function pathTo(pos)
             return false
         end
     end
+
+    rsleep()
 
     return true
 end
@@ -96,14 +107,15 @@ local function collectNearby(centerPos)
             end)
 
             sleep(CONFIG.COLLECT_DELAY)
+            rsleep()
         end
     end
 end
 
 local function isSolid(tile)
     return tile
-    and tile.foreground ~= 0
-    and tile.foreground % 2 == 0
+        and tile.foreground ~= 0
+        and tile.foreground % 2 == 0
 end
 
 local function isHarvestable(tile)
@@ -140,11 +152,15 @@ local function doHarvest()
                 repeat
                     client:hit(pos)
                     sleep(CONFIG.HIT_DELAY)
+                    rsleep()
+
                     tile = world:tile(pos)
                 until not tile or tile.foreground == 0
 
                 collectNearby(pos)
+
                 sleep(CONFIG.TREE_DELAY)
+                rsleep()
             end
 
             ::continue::
@@ -178,15 +194,24 @@ local function doPlantAll()
             tmpPos.y = py
 
             if pathTo(tmpPos) then
-                client:place(tmpPos, CONFIG.ITEM_ID, InventoryItemType.seed)
+                client:place(
+                    tmpPos,
+                    CONFIG.ITEM_ID,
+                    InventoryItemType.seed
+                )
+
                 sleep(CONFIG.PLACE_DELAY)
+                rsleep()
             end
         end
     end
 end
 
 local function doPNB()
-    local startPos = Vector2i.new(CONFIG.START_X, CONFIG.START_Y)
+    local startPos = Vector2i.new(
+        CONFIG.START_X,
+        CONFIG.START_Y
+    )
 
     while true do
         local block = getBlockCount()
@@ -216,8 +241,14 @@ local function doPNB()
             local tile = world:tile(pos)
 
             if tile and tile.foreground == 0 then
-                client:place(pos, CONFIG.ITEM_ID, InventoryItemType.block)
+                client:place(
+                    pos,
+                    CONFIG.ITEM_ID,
+                    InventoryItemType.block
+                )
+
                 sleep(CONFIG.PLACE_DELAY)
+                rsleep()
             end
         end
 
@@ -225,15 +256,20 @@ local function doPNB()
             for i = 1, CONFIG.HIT_COUNT do
                 client:hit(pos)
                 sleep(CONFIG.HIT_DELAY)
+                rsleep()
             end
         end
 
         collectNearby(p)
+        rsleep()
     end
 end
 
 local function doDrop()
-    local dropPos = Vector2i.new(CONFIG.DROP_X, CONFIG.DROP_Y)
+    local dropPos = Vector2i.new(
+        CONFIG.DROP_X,
+        CONFIG.DROP_Y
+    )
 
     pathTo(dropPos)
 
@@ -242,10 +278,8 @@ local function doDrop()
 
     for _, item in pairs(inv.items) do
         if item and item.id then
-
             if item.id == CONFIG.ITEM_ID
             and item.type == InventoryItemType.seed then
-
                 if item.amount >= CONFIG.DROP_LIMIT then
                     client:drop(
                         item.id,
@@ -254,6 +288,7 @@ local function doDrop()
                     )
 
                     sleep(300)
+                    rsleep()
                 end
 
             elseif item.type == InventoryItemType.consumable then
@@ -264,6 +299,7 @@ local function doDrop()
                 )
 
                 sleep(300)
+                rsleep()
             end
         end
     end
@@ -273,16 +309,25 @@ runThread(function()
     while true do
         if joinWorld() then
             doHarvest()
+            rsleep()
+
             doPlantAll()
+            rsleep()
 
             if getBlockCount() >= CONFIG.PNB_BLOCK_LIMIT then
-                pathTo(Vector2i.new(CONFIG.START_X, CONFIG.START_Y))
+                pathTo(Vector2i.new(
+                    CONFIG.START_X,
+                    CONFIG.START_Y
+                ))
+
                 doPNB()
             end
 
+            rsleep()
             doDrop()
         end
 
         sleep(CONFIG.LOOP_DELAY)
+        rsleep()
     end
 end)
