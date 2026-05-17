@@ -1,8 +1,6 @@
--- Added presend callback, unlike other callbacks this is direct call.
-
 local CONFIG = {
-    FARM_WORLD = "WORLDNAME",
-    FARM_ID    = "ID",
+    FARM_WORLD = "DEELS",
+    FARM_ID    = "AI",
 
     TARGET_BLOCK = 5,
     MAX_BLOCKS   = 40,
@@ -10,159 +8,109 @@ local CONFIG = {
 
     RECONNECT_DELAY = 5000,
     WARP_DELAY      = 5000,
-    COLLECT_DELAY   = 120,
     PATH_DELAY      = 300,
+    COLLECT_DELAY   = 120,
     LOOP_DELAY      = 1000
 }
 
 local client = getClient()
-local working = false
 
-local function worldFarm()
-    return CONFIG.FARM_WORLD .. ":" .. CONFIG.FARM_ID
+local function isOnline()
+    return client.status == GameClientStatus.online and client:connected()
 end
 
-local function waitOnline()
-    while client.status ~= GameClientStatus.online do
-        if client.status == GameClientStatus.kicked
-        or client.status == GameClientStatus.timeout
-        or not client:connected() then
-            client:connect()
-        end
+local function inWorld()
+    local nav = client:navigation()
+    if not nav then return false end
+    return string.find(string.upper(tostring(nav)), string.upper(CONFIG.FARM_WORLD), 1, true) ~= nil
+end
 
+local function warpNormal()
+    while not isOnline() do
+        client:connect()
         sleep(CONFIG.RECONNECT_DELAY)
     end
-end
 
-local function waitWorld(worldName)
-    local target = string.upper(worldName)
-
-    while true do
-        local nav = client:navigation()
-
-        if nav and string.find(string.upper(tostring(nav)), target, 1, true) then
-            return
-        end
-
-        sleep(1000)
+    while not inWorld() do
+        client:warp(CONFIG.FARM_WORLD)
+        sleep(CONFIG.WARP_DELAY)
     end
 end
 
-local function warpFarm()
-    client:warp(worldFarm())
+local function warpWithId()
+    client:warp(CONFIG.FARM_WORLD .. ":" .. CONFIG.FARM_ID)
     sleep(CONFIG.WARP_DELAY)
-    waitWorld(CONFIG.FARM_WORLD)
 end
 
 local function collectFloating()
-    local w = client:world()
-    if not w then return end
+    local world = client:world()
+    if not world then return end
 
-    for _, obj in pairs(w.collectables) do
-        if obj and obj.point then
-            local p = obj:point()
-
+    for _, obj in pairs(world.collectables) do
+        local p = obj:point()
+        if p then
             client:findPath(Vector2i.new(p.x, p.y))
             sleep(CONFIG.PATH_DELAY)
-
-            pcall(function()
-                client:collect(obj.id)
-            end)
-
+            client:collect(obj.id)
             sleep(CONFIG.COLLECT_DELAY)
         end
     end
 end
 
-local function reconnectLoop()
-    while true do
-        if client.status == GameClientStatus.kicked
-        or client.status == GameClientStatus.timeout
-        or not client:connected() then
+local function pnb()
+    local amount = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
+    if amount <= 0 then return end
 
-            working = false
+    local cp = client:point()
 
-            waitOnline()
-            warpFarm()
+    local points = {
+        Vector2i.new(cp.x - 2, cp.y - 2),
+        Vector2i.new(cp.x - 1, cp.y - 2),
+        Vector2i.new(cp.x,     cp.y - 2),
+        Vector2i.new(cp.x + 1, cp.y - 2),
+        Vector2i.new(cp.x + 2, cp.y - 2)
+    }
+
+    local total = math.min(amount, CONFIG.MAX_BLOCKS)
+
+    for i = 1, total do
+        if not isOnline() then return end
+
+        local point = points[((i - 1) % #points) + 1]
+
+        client:place(point, CONFIG.TARGET_BLOCK, InventoryItemType.block)
+
+        for h = 1, CONFIG.MIN_HITS do
+            client:send("HB", {
+                x = point.x,
+                y = point.y
+            })
         end
-
-        sleep(2000)
     end
 end
 
-function breakBlocks(targetBlock, maxBlocks, minHits)
-    client:on("presend", function(message)
-        if working then return end
-        working = true
-
-        local amount = client:inventory():count(targetBlock, InventoryItemType.block)
-
-        if amount <= 0 then
-            working = false
-            return
-        end
-
-        local clientPoint = client:point()
-
-        local tilePoints = {
-            Vector2i.new(clientPoint.x - 2, clientPoint.y - 2),
-            Vector2i.new(clientPoint.x - 1, clientPoint.y - 2),
-            Vector2i.new(clientPoint.x,     clientPoint.y - 2),
-            Vector2i.new(clientPoint.x + 1, clientPoint.y - 2),
-            Vector2i.new(clientPoint.x + 2, clientPoint.y - 2)
-        }
-
-        local blocks = math.min(amount, maxBlocks)
-
-        for i = 1, blocks do
-            if client.status ~= GameClientStatus.online then
-                working = false
-                return
-            end
-
-            local index = ((i - 1) % #tilePoints) + 1
-            local tilePoint = tilePoints[index]
-
-            client:place(tilePoint, targetBlock, InventoryItemType.block)
-
-            for j = 1, minHits do
-                client:send("HB", {
-                    x = tilePoint.x,
-                    y = tilePoint.y
-                })
-            end
-        end
-
-        working = false
-    end)
-end
-
 runThread(function()
-    while true do
-        waitOnline()
+    warpNormal()
 
-        if client:navigation() == nil then
-            warpFarm()
+    while true do
+        if not isOnline() then
+            warpNormal()
         end
 
-        local amount = client:inventory():count(
-            CONFIG.TARGET_BLOCK,
-            InventoryItemType.block
-        )
+        local amount = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
 
         if amount <= 0 then
-            warpFarm()
+            warpWithId()
             collectFloating()
+            warpNormal()
+        else
+            if not inWorld() then
+                warpNormal()
+            end
+
+            pnb()
         end
 
         sleep(CONFIG.LOOP_DELAY)
     end
 end)
-
-runThread(reconnectLoop)
-
-breakBlocks(
-    CONFIG.TARGET_BLOCK,
-    CONFIG.MAX_BLOCKS,
-    CONFIG.MIN_HITS
-)
