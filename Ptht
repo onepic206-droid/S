@@ -1,37 +1,29 @@
 local client = getClient()
 
 Config = {
-    WORLD = "TEST123",
-    DOOR = "ID",
+    WORLD = "NOLES:AB",
 
     MODE = "BOTH", -- "HT" / "PLANT" / "BOTH"
 
+    ITEM_ID = 5,
+
     HIT_DELAY = 180,
     TREE_DELAY = 200,
-    PLANT_DELAY = 80,
+    PLANT_DELAY = 180,
     LOOP_DELAY = 1000,
 
-    DROP_X = 10,
-    DROP_Y = 10,
+    DROP_X = 40,
+    DROP_Y = 3,
 
-    MAX_AMOUNT = 999,
-    ITEM_ID = 5
+    MAX_AMOUNT = 999
 }
 
 local function joinWorld()
-    client:warp(Config.WORLD, Config.DOOR)
+    client:warp(Config.WORLD)
 
     repeat
         sleep(1000)
-
-        local world = client:world()
-
-        if world and world.name then
-            if world.name:upper() == Config.WORLD:upper() then
-                break
-            end
-        end
-    until false
+    until client:world() ~= nil
 end
 
 local function pathTo(pos)
@@ -48,6 +40,7 @@ end
 local function getCount(id, itemType)
     local inv = client:inventory()
     if not inv then return 0 end
+
     return inv:count(id, itemType) or 0
 end
 
@@ -88,7 +81,10 @@ local function collectSeed()
     if not world then return false end
 
     for _, obj in pairs(world.collectables) do
-        if obj and obj.id == Config.ITEM_ID then
+        if obj
+            and obj.blockType == Config.ITEM_ID
+            and obj.inventoryType == InventoryItemType.seed
+        then
             local p = obj:point()
 
             pathTo(p)
@@ -108,12 +104,10 @@ end
 local function dropItem(id, itemType, amount)
     if amount <= 0 then return end
 
-    local dropPos = Vector2i.new(Config.DROP_X, Config.DROP_Y)
-
-    pathTo(dropPos)
+    pathTo(Vector2i.new(Config.DROP_X, Config.DROP_Y))
     sleep(300)
 
-    client:drop(id, amount, itemType)
+    client:drop(id, itemType, amount)
     sleep(500)
 end
 
@@ -191,15 +185,15 @@ local function plantWorld()
             pos.x = px
             pos.y = py
 
-            pathTo(pos)
+            if pathTo(pos) then
+                client:place(
+                    pos,
+                    Config.ITEM_ID,
+                    InventoryItemType.seed
+                )
 
-            client:place(
-                pos,
-                Config.ITEM_ID,
-                InventoryItemType.seed
-            )
-
-            sleep(Config.PLANT_DELAY)
+                sleep(Config.PLANT_DELAY)
+            end
         end
     end
 end
@@ -208,9 +202,7 @@ runThread(function()
     joinWorld()
 
     while true do
-        local world = client:world()
-
-        if not world or world.name:upper() ~= Config.WORLD:upper() then
+        if not client:world() then
             joinWorld()
         end
 
