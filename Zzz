@@ -1,0 +1,343 @@
+local client = getClient()
+
+local CONFIG = {
+    FARM_WORLD = "kerjakedua",
+
+    ITEM_ID = 5,
+
+    MODE = "ONE_ROW",
+    ONE_ROW_Y = 10,
+
+    DROP_X = 10,
+    DROP_Y = 10,
+    SEED_DROP_LIMIT = 30,
+    KEEP_SEED = 20,
+
+    HIT_DELAY = 180,
+    PLANT_DELAY = 80,
+    TREE_DELAY = 100,
+    LOOP_DELAY = 500,
+
+    PATH_TIMEOUT = 8000,
+
+    COLLECT_RANGE = 6,
+    COLLECT_DELAY = 20,
+
+    PNB_MAX_BLOCKS = 40,
+    PNB_HITS = 3,
+
+    RECONNECT_DELAY = 3000,
+    WARP_DELAY = 5000
+}
+
+getPreferences().collect = true
+getPreferences().collectInterval = 50
+getPreferences().reconnect = true
+getPreferences().reconnectInterval = CONFIG.RECONNECT_DELAY
+
+local workingPNB = false
+local skipTile = {}
+
+local function v2(x, y)
+    return Vector2i.new(x, y)
+end
+
+local function key(x, y)
+    return tostring(x) .. ":" .. tostring(y)
+end
+
+local function currentWorld()
+    local w = client:world()
+    if not w then return "" end
+    return string.upper(tostring(w.id or ""))
+end
+
+local function inFarmWorld()
+    return currentWorld() == string.upper(CONFIG.FARM_WORLD)
+end
+
+local function waitOnline()
+    while client.status ~= GameClientStatus.online do
+        sleep(1000)
+    end
+end
+
+local function ensureFarmWorld()
+    waitOnline()
+
+    if not inFarmWorld() then
+        client:warp(CONFIG.FARM_WORLD)
+        sleep(CONFIG.WARP_DELAY)
+    end
+
+    return inFarmWorld()
+end
+
+local function isSolid(tile)
+    return tile and tile.foreground ~= 0 and tile.foreground % 2 == 0
+end
+
+local function pathTo(pos)
+    if not ensureFarmWorld() then return false end
+
+    client:findPath(pos)
+
+    local t = 0
+    while client:pathfinding() do
+        sleep(50)
+        t = t + 50
+
+        if client.status ~= GameClientStatus.online then
+            client:clearPath()
+            return false
+        end
+
+        if t >= CONFIG.PATH_TIMEOUT then
+            client:clearPath()
+            return false
+        end
+    end
+
+    return true
+end
+
+local function collectNearby(pos)
+    local world = client:world()
+    if not world then return end
+
+    for _, obj in pairs(world.collectables) do
+        local op = obj:point()
+        local dist = math.abs(pos.x - op.x) + math.abs(pos.y - op.y)
+
+        if dist <= CONFIG.COLLECT_RANGE then
+            pcall(function()
+                client:collect(obj.id)
+            end)
+            sleep(CONFIG.COLLECT_DELAY)
+        end
+    end
+end
+
+local function isHarvestable(tile)
+    if not tile or tile.foreground == 0 then
+        return false
+    end
+
+    local tree = tile:tree()
+    return tree and tree:ready()
+end
+
+local function dropAllConsumable()
+    local inv = client:inventory()
+    if not inv or not inv.items then return end
+
+    for _, item in pairs(inv.items) do
+        if item and item.type == InventoryItemType.consumable and item.amount > 0 then
+            client:drop(item.id, InventoryItemType.consumable, item.amount)
+            sleep(500)
+        end
+    end
+end
+
+local function doDropSeed()
+    if not ensureFarmWorld() then return false end
+
+    local seed = client:inventory():count(CONFIG.ITEM_ID, InventoryItemType.seed)
+
+    if seed < CONFIG.SEED_DROP_LIMIT then
+        return false
+    end
+
+    local dropSeed = seed - CONFIG.KEEP_SEED
+    local dropPos = v2(CONFIG.DROP_X, CONFIG.DROP_Y)
+
+    if not pathTo(dropPos) then
+        return false
+    end
+
+    sleep(300)
+
+    if dropSeed > 0 then
+        client:drop(CONFIG.ITEM_ID, InventoryItemType.seed, dropSeed)
+        sleep(500)
+    end
+
+    dropAllConsumable()
+
+    return true
+end
+
+local function doPNB()
+    if workingPNB then return false end
+    if not ensureFarmWorld() then return false end
+
+    local amount = client:inventory():count(CONFIG.ITEM_ID, InventoryItemType.block)
+    if amount <= 0 then return false end
+
+    workingPNB = true
+
+    local p = client:point()
+    local points = {
+        v2(p.x - 2, p.y - 2),
+        v2(p.x - 1, p.y - 2),
+        v2(p.x,     p.y - 2),
+        v2(p.x + 1, p.y - 2),
+        v2(p.x + 2, p.y - 2)
+    }
+
+    local blocks = math.min(amount, CONFIG.PNB_MAX_BLOCKS)
+
+    for i = 1, blocks do
+        if client.status ~= GameClientStatus.online then
+            break
+        end
+
+        local tp = points[((i - 1) % #points) + 1]
+
+        client:place(tp, CONFIG.ITEM_ID, InventoryItemType.block)
+
+        for _ = 1, CONFIG.PNB_HITS do
+            client:send("HB", {
+                x = tp.x,
+                y = tp.y
+            })
+        end
+    end
+
+    collectNearby(p)
+    workingPNB = false
+    return true
+end
+
+local function doHarvest()
+    if not ensureFarmWorld() then return false end
+
+    local world = client:world()
+    if not world then return false end
+
+    local yStart = CONFIG.ONE_ROW_Y
+    local yEnd = CONFIG.ONE_ROW_Y
+
+    if CONFIG.MODE == "FULL_AREA" then
+        yStart = world.size.y - 2
+        yEnd = 1
+    end
+
+    for y = yStart, yEnd, -1 do
+        for x = 1, world.size.x - 2 do
+            if not skipTile[key(x, y)] then
+                local pos = v2(x, y)
+                local tile = world:tile(pos)
+
+                if isHarvestable(tile) then
+                    local my = client:point()
+                    local dist = math.abs(my.x - x) + math.abs(my.y - y)
+
+                    if dist > 2 and not pathTo(pos) then
+                        skipTile[key(x, y)] = true
+                    else
+                        repeat
+                            if client.status ~= GameClientStatus.online then
+                                return false
+                            end
+
+                            client:hit(pos)
+                            sleep(CONFIG.HIT_DELAY)
+
+                            tile = world:tile(pos)
+                        until not tile or tile.foreground == 0 or not isHarvestable(tile)
+
+                        collectNearby(pos)
+                        sleep(CONFIG.TREE_DELAY)
+                        return true
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+local function doPlant()
+    if not ensureFarmWorld() then return false end
+
+    local world = client:world()
+    if not world then return false end
+
+    local seed = client:inventory():count(CONFIG.ITEM_ID, InventoryItemType.seed)
+    if seed <= 0 then return false end
+
+    local pos = v2(0, 0)
+    local belowPos = v2(0, 0)
+
+    for _, tile in pairs(world.tiles) do
+        local p = tile:point()
+        local x, y = p.x, p.y
+
+        if CONFIG.MODE == "FULL_AREA" or y == CONFIG.ONE_ROW_Y then
+            belowPos.x = x
+            belowPos.y = y + 1
+
+            local below = world:tile(belowPos)
+
+            if tile.foreground == 0 and isSolid(below) then
+                pos.x = x
+                pos.y = y
+
+                if pathTo(pos) then
+                    client:place(pos, CONFIG.ITEM_ID, InventoryItemType.seed)
+                    sleep(CONFIG.PLANT_DELAY)
+                    return true
+                else
+                    skipTile[key(x, y)] = true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+runThread(function()
+    while true do
+        waitOnline()
+
+        if not inFarmWorld() then
+            client:warp(CONFIG.FARM_WORLD)
+            sleep(CONFIG.WARP_DELAY)
+        end
+
+        sleep(1000)
+    end
+end)
+
+runThread(function()
+    while true do
+        if ensureFarmWorld() then
+            local didWork = false
+
+            didWork = doDropSeed()
+
+            if not didWork then
+                didWork = doPNB()
+            end
+
+            if not didWork then
+                didWork = doHarvest()
+            end
+
+            if not didWork then
+                didWork = doPlant()
+            end
+
+            if not didWork then
+                local p = client:point()
+                collectNearby(p)
+                sleep(CONFIG.LOOP_DELAY)
+            end
+        else
+            sleep(CONFIG.RECONNECT_DELAY)
+        end
+    end
+end)
