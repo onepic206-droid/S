@@ -12,31 +12,41 @@ runThread(function()
     if not world then return end
 
     local pos = Vector2i.new(0, 0)
+    local belowPos = Vector2i.new(0, 0)
 
     for _, tile in pairs(world.tiles) do
+        world = client:world()
+        if not world then return end
+
         local point = tile:point()
         local px, py = point.x, point.y
 
-        pos.x = px
-        pos.y = py + 1
+        belowPos.x = px
+        belowPos.y = py + 1
 
-        local below = world:tile(pos)
+        local below = world:tile(belowPos)
 
         if tile.foreground == 0 and isSolid(below) then
             local me = client:point()
 
-            if math.abs(me.x - px) <= 5 and math.abs(me.y - py) <= 2 then
-                pos.x = px
-                pos.y = py
+            pos.x = px
+            pos.y = py
 
-                client:place(
-                    pos,
-                    PlantID,
-                    InventoryItemType.seed
-                )
+            if math.abs(me.x - px) > 5 or math.abs(me.y - py) > 2 then
+                client:findPath(pos)
 
-                sleep(delayPlant)
+                repeat
+                    sleep(5)
+                until not client:pathfinding()
             end
+
+            client:place(
+                pos,
+                PlantID,
+                InventoryItemType.seed
+            )
+
+            sleep(delayPlant)
         end
     end
 end)
