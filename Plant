@@ -1,6 +1,6 @@
 local client = getClient()
 
-local PlantID = 5
+local PlantID = 4585
 local delayPlant = 300
 
 local function isSolid(tile)
@@ -11,21 +11,29 @@ runThread(function()
     local world = client:world()
     if not world then return end
 
+    local pos = Vector2i.new(0, 0)
+
     for _, tile in pairs(world.tiles) do
         local point = tile:point()
         local px, py = point.x, point.y
 
-        local below = world:tile(Vector2i.new(px, py + 1))
+        pos.x = px
+        pos.y = py + 1
+
+        local below = world:tile(pos)
 
         if tile.foreground == 0 and isSolid(below) then
-            client:findPath(Vector2i.new(px, py))
+            pos.x = px
+            pos.y = py
+
+            client:findPath(pos)
 
             repeat
                 sleep(10)
             until not client:pathfinding()
 
             client:place(
-                Vector2i.new(px, py),
+                pos,
                 PlantID,
                 InventoryItemType.seed
             )
