@@ -1,22 +1,39 @@
 local client = getClient()
 
 Config = {
-    WORLD = "NOLES:AB",
+    WORLD = "NAMAWORLD:ID",
 
-    MODE = "BOTH", -- "HT" / "PLANT" / "BOTH"
+    MODE = "PLANT", -- "HT" / "PLANT" / "BOTH"
 
     ITEM_ID = 5,
 
     HIT_DELAY = 180,
     TREE_DELAY = 200,
-    PLANT_DELAY = 180,
+    PLANT_DELAY = 80,
     LOOP_DELAY = 1000,
+
+    RAND_MIN = 80,
+    RAND_MAX = 150,
 
     DROP_X = 40,
     DROP_Y = 3,
 
-    MAX_AMOUNT = 999
+    MAX_AMOUNT = 999,
+
+    PATH_TIMEOUT = 5000,
+    PATH_CHECK = 50,
+
+    PLANT_LINE = 5
 }
+
+local function rsleep(base)
+    sleep(base + math.random(Config.RAND_MIN, Config.RAND_MAX))
+end
+
+local function getWorldName()
+    local w = client:world()
+    return w and w.id or ""
+end
 
 local function joinWorld()
     client:warp(Config.WORLD)
@@ -27,20 +44,33 @@ local function joinWorld()
 end
 
 local function pathTo(pos)
+    local p = client:point()
+    if p and p.x == pos.x and p.y == pos.y then
+        return true
+    end
+
     client:findPath(pos)
 
-    repeat
-        sleep(10)
-    until not client:pathfinding()
+    local t = 0
+    while client:pathfinding() and t < Config.PATH_TIMEOUT do
+        sleep(Config.PATH_CHECK)
+        t = t + Config.PATH_CHECK
+    end
 
-    local p = client:point()
-    return p and p.x == pos.x and p.y == pos.y
+    if client:pathfinding() then
+        client:clearPath()
+        return false
+    end
+
+    p = client:point()
+    return p
+        and math.abs(p.x - pos.x) <= 1
+        and math.abs(p.y - pos.y) <= 1
 end
 
 local function getCount(id, itemType)
     local inv = client:inventory()
     if not inv then return 0 end
-
     return inv:count(id, itemType) or 0
 end
 
@@ -65,12 +95,14 @@ local function collectNearby(center)
         if obj and obj.point then
             local p = obj:point()
 
-            if math.abs(p.x - center.x) <= 3 and math.abs(p.y - center.y) <= 3 then
+            if math.abs(p.x - center.x) <= 3
+                and math.abs(p.y - center.y) <= 3
+            then
                 pcall(function()
                     client:collect(obj.id)
                 end)
 
-                sleep(80)
+                rsleep(80)
             end
         end
     end
@@ -87,14 +119,14 @@ local function collectSeed()
         then
             local p = obj:point()
 
-            pathTo(p)
+            if pathTo(p) then
+                pcall(function()
+                    client:collect(obj.id)
+                end)
 
-            pcall(function()
-                client:collect(obj.id)
-            end)
-
-            sleep(100)
-            return true
+                rsleep(100)
+                return true
+            end
         end
     end
 
@@ -104,11 +136,11 @@ end
 local function dropItem(id, itemType, amount)
     if amount <= 0 then return end
 
-    pathTo(Vector2i.new(Config.DROP_X, Config.DROP_Y))
-    sleep(300)
-
-    client:drop(id, itemType, amount)
-    sleep(500)
+    if pathTo(Vector2i.new(Config.DROP_X, Config.DROP_Y)) then
+        rsleep(300)
+        client:drop(id, itemType, amount)
+        rsleep(500)
+    end
 end
 
 local function checkDrop()
@@ -119,41 +151,98 @@ local function checkDrop()
     end
 end
 
-local function harvestWorld()
+local function scanZigZag(callback)
     local world = client:world()
     if not world then return end
 
-    for y = world.size.y - 2, 1, -1 do
-        for x = 1, world.size.x - 2 do
-            checkDrop()
+    local left = 1
+    local right = world.size.x - 2
+    local top = 1
+    local bottom = world.size.y - 2
+    local leftToRight = true
 
-            local treePos = Vector2i.new(x, y)
-            local tile = world:tile(treePos)
-
-            if isHarvestable(tile) then
-                local myPos = client:point()
-                local dist = math.abs(myPos.x - x) + math.abs(myPos.y - y)
-
-                if dist > 2 then
-                    if not pathTo(treePos) then
-                        goto continue
-                    end
-                end
-
-                repeat
-                    client:hit(treePos)
-                    sleep(Config.HIT_DELAY)
-
-                    tile = world:tile(treePos)
-                until not tile or tile.foreground == 0
-
-                collectNearby(treePos)
-                checkDrop()
-
-                sleep(Config.TREE_DELAY)
+    for y = top, bottom do
+        if leftToRight then
+            for x = left, right do
+                callback(world, x, y)
             end
+        else
+            for x = right, left, -1 do
+                callback(world, x, y)
+            end
+        end
 
-            ::continue::
+        leftToRight = not leftToRight
+    end
+end
+
+local function harvestWorld()
+    scanZigZag(function(world, x, y)
+        checkDrop()
+
+        local treePos = Vector2i.new(x, y)
+        local tile = world:tile(treePos)
+
+        if not isHarvestable(tile) then
+            return
+        end
+
+        local myPos = client:point()
+        local dist = math.abs(myPos.x - x) + math.abs(myPos.y - y)
+
+        if dist > 2 then
+            if not pathTo(treePos) then
+                return
+            end
+        end
+
+        local hitTry = 0
+
+        repeat
+            client:hit(treePos)
+            rsleep(Config.HIT_DELAY)
+
+            tile = world:tile(treePos)
+            hitTry = hitTry + 1
+        until not tile or tile.foreground == 0 or hitTry >= 10
+
+        collectNearby(treePos)
+        checkDrop()
+
+        rsleep(Config.TREE_DELAY)
+    end)
+end
+
+local function plantLine(world, startX, y)
+    local seedCount = getCount(Config.ITEM_ID, InventoryItemType.seed)
+    if seedCount <= 0 then return end
+
+    local planted = 0
+
+    for i = 0, Config.PLANT_LINE - 1 do
+        local x = startX + i
+
+        if x >= world.size.x - 1 then
+            break
+        end
+
+        local pos = Vector2i.new(x, y)
+        local tile = world:tile(pos)
+        local below = world:tile(Vector2i.new(x, y + 1))
+
+        if tile and tile.foreground == 0 and isSolid(below) then
+            client:place(
+                pos,
+                Config.ITEM_ID,
+                InventoryItemType.seed
+            )
+
+            planted = planted + 1
+            rsleep(Config.PLANT_DELAY)
+
+            if planted >= seedCount then
+                break
+            end
         end
     end
 end
@@ -162,38 +251,25 @@ local function plantWorld()
     local world = client:world()
     if not world then return end
 
-    local pos = Vector2i.new(0, 0)
+    for y = 1, world.size.y - 2 do
+        local x = 1
 
-    for _, tile in pairs(world.tiles) do
-        checkDrop()
+        while x <= world.size.x - 2 do
+            checkDrop()
 
-        if getCount(Config.ITEM_ID, InventoryItemType.seed) <= 0 then
-            if not collectSeed() then
+            if getCount(Config.ITEM_ID, InventoryItemType.seed) <= 0 then
+                collectSeed()
                 return
             end
-        end
 
-        local point = tile:point()
-        local px, py = point.x, point.y
+            local target = Vector2i.new(x, y)
 
-        pos.x = px
-        pos.y = py + 1
-
-        local below = world:tile(pos)
-
-        if tile.foreground == 0 and isSolid(below) then
-            pos.x = px
-            pos.y = py
-
-            if pathTo(pos) then
-                client:place(
-                    pos,
-                    Config.ITEM_ID,
-                    InventoryItemType.seed
-                )
-
-                sleep(Config.PLANT_DELAY)
+            if pathTo(target) then
+                plantLine(world, x, y)
             end
+
+            x = x + Config.PLANT_LINE
+            rsleep(Config.TREE_DELAY)
         end
     end
 end
@@ -219,6 +295,6 @@ runThread(function()
             plantWorld()
         end
 
-        sleep(Config.LOOP_DELAY)
+        rsleep(Config.LOOP_DELAY)
     end
 end)
