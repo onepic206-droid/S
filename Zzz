@@ -5,7 +5,7 @@ local CONFIG = {
     TARGET_BLOCK = 25,
     MAX_BLOCKS   = 200,
     MIN_HITS     = 3,
-    MIN_STOCK    = 100,  -- ✅ Threshold refill
+    MIN_STOCK    = 100,
 
     RECONNECT_DELAY = 5000,
     WARP_DELAY      = 5000,
@@ -13,7 +13,7 @@ local CONFIG = {
     COLLECT_DELAY   = 120,
     LOOP_DELAY      = 1000,
 
-    COLLECT_TIMEOUT = 8000
+    COLLECT_ROUNDS  = 3  -- max berapa kali scan ulang collectables
 }
 
 local client = getClient()
@@ -45,25 +45,22 @@ local function warpWithId()
     sleep(CONFIG.WARP_DELAY)
 end
 
+-- ✅ FIX: pakai counter, bukan os.clock(); filter pakai obj.blockType bukan obj.id
 local function collectFloating()
-    local world = client:world()
-    if not world then return end
-
-    local deadline = os.clock() * 1000 + CONFIG.COLLECT_TIMEOUT
-
-    repeat
-        world = client:world()
+    for round = 1, CONFIG.COLLECT_ROUNDS do
+        local world = client:world()
         if not world then break end
 
         local found = false
 
         for _, obj in pairs(world.collectables) do
-            if obj.id == CONFIG.TARGET_BLOCK then
+            -- ✅ obj.blockType = item id, obj.id = instance id (untuk collect)
+            if obj.blockType == CONFIG.TARGET_BLOCK then
                 local p = obj:point()
                 if p then
                     client:findPath(Vector2i.new(p.x, p.y))
                     sleep(CONFIG.PATH_DELAY)
-                    client:collect(obj.id)
+                    client:collect(obj.id)  -- instance id
                     sleep(CONFIG.COLLECT_DELAY)
                     found = true
                 end
@@ -71,11 +68,9 @@ local function collectFloating()
         end
 
         if not found then break end
-
-    until (os.clock() * 1000) >= deadline
+    end
 end
 
--- ✅ Refill: warp ke world:id, collect, balik farm
 local function refillBlock()
     warpWithId()
     collectFloating()
@@ -130,14 +125,12 @@ runThread(function()
 
         local amount = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
 
-        -- ✅ Kalau block kosong atau di bawah MIN_STOCK, refill dulu
         if amount < CONFIG.MIN_STOCK then
             refillBlock()
         else
             if not inWorld() then
                 warpNormal()
             end
-
             pnb()
         end
 
