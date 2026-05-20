@@ -1,238 +1,146 @@
-local client = getClient()
+local CONFIG = {
+    FARM_WORLD = "ABANGKU12",
+    FARM_ID    = "LI",
 
-Config = {
-    WORLD = "NOLES:AB",
+    TARGET_BLOCK = 25,
+    MAX_BLOCKS   = 200,
+    MIN_HITS     = 3,
+    MIN_STOCK    = 100,  -- ✅ Threshold refill
 
-    MODE = "BOTH", -- "HT" / "PLANT" / "BOTH"
+    RECONNECT_DELAY = 5000,
+    WARP_DELAY      = 5000,
+    PATH_DELAY      = 300,
+    COLLECT_DELAY   = 120,
+    LOOP_DELAY      = 1000,
 
-    ITEM_ID = 5,
-
-    HIT_DELAY = 180,
-    TREE_DELAY = 200,
-    PLANT_DELAY = 180,
-    LOOP_DELAY = 1000,
-
-    RAND_MIN = 80,
-    RAND_MAX = 150,
-
-    DROP_X = 40,
-    DROP_Y = 3,
-
-    MAX_AMOUNT = 999
+    COLLECT_TIMEOUT = 8000
 }
 
-local function rsleep(base)
-    sleep(base + math.random(Config.RAND_MIN, Config.RAND_MAX))
+local client = getClient()
+
+local function isOnline()
+    return client.status == GameClientStatus.online and client:connected()
 end
 
-local function joinWorld()
-    client:warp(Config.WORLD)
-
-    repeat
-        sleep(1000)
-    until client:world() ~= nil
+local function inWorld()
+    local nav = client:navigation()
+    if not nav then return false end
+    return string.find(string.upper(tostring(nav)), string.upper(CONFIG.FARM_WORLD), 1, true) ~= nil
 end
 
-local function pathTo(pos)
-    client:findPath(pos)
-
-    repeat
-        sleep(10)
-    until not client:pathfinding()
-
-    local p = client:point()
-    return p and p.x == pos.x and p.y == pos.y
-end
-
-local function getCount(id, itemType)
-    local inv = client:inventory()
-    if not inv then return 0 end
-    return inv:count(id, itemType) or 0
-end
-
-local function isSolid(tile)
-    return tile and tile.foreground ~= 0 and tile.foreground % 2 == 0
-end
-
-local function isHarvestable(tile)
-    if not tile or tile.foreground == 0 then
-        return false
+local function warpNormal()
+    while not isOnline() do
+        client:connect()
+        sleep(CONFIG.RECONNECT_DELAY)
     end
 
-    local tree = tile:tree()
-    return tree and tree:ready()
+    while not inWorld() do
+        client:warp(CONFIG.FARM_WORLD)
+        sleep(CONFIG.WARP_DELAY)
+    end
 end
 
-local function collectNearby(center)
+local function warpWithId()
+    client:warp(CONFIG.FARM_WORLD .. ":" .. CONFIG.FARM_ID)
+    sleep(CONFIG.WARP_DELAY)
+end
+
+local function collectFloating()
     local world = client:world()
     if not world then return end
 
-    for _, obj in pairs(world.collectables) do
-        if obj and obj.point then
-            local p = obj:point()
+    local deadline = os.clock() * 1000 + CONFIG.COLLECT_TIMEOUT
 
-            if math.abs(p.x - center.x) <= 3 and math.abs(p.y - center.y) <= 3 then
-                pcall(function()
+    repeat
+        world = client:world()
+        if not world then break end
+
+        local found = false
+
+        for _, obj in pairs(world.collectables) do
+            if obj.id == CONFIG.TARGET_BLOCK then
+                local p = obj:point()
+                if p then
+                    client:findPath(Vector2i.new(p.x, p.y))
+                    sleep(CONFIG.PATH_DELAY)
                     client:collect(obj.id)
-                end)
-
-                rsleep(80)
+                    sleep(CONFIG.COLLECT_DELAY)
+                    found = true
+                end
             end
         end
+
+        if not found then break end
+
+    until (os.clock() * 1000) >= deadline
+end
+
+-- ✅ Refill: warp ke world:id, collect, balik farm
+local function refillBlock()
+    warpWithId()
+    collectFloating()
+
+    local after = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
+    if after > 0 then
+        warpNormal()
+    else
+        sleep(CONFIG.LOOP_DELAY)
     end
 end
 
-local function collectSeed()
-    local world = client:world()
-    if not world then return false end
-
-    for _, obj in pairs(world.collectables) do
-        if obj
-            and obj.blockType == Config.ITEM_ID
-            and obj.inventoryType == InventoryItemType.seed
-        then
-            local p = obj:point()
-
-            pathTo(p)
-
-            pcall(function()
-                client:collect(obj.id)
-            end)
-
-            rsleep(100)
-            return true
-        end
-    end
-
-    return false
-end
-
-local function dropItem(id, itemType, amount)
+local function pnb()
+    local amount = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
     if amount <= 0 then return end
 
-    pathTo(Vector2i.new(Config.DROP_X, Config.DROP_Y))
-    rsleep(300)
+    local cp = client:point()
 
-    client:drop(id, itemType, amount)
-    rsleep(500)
-end
+    local points = {
+        Vector2i.new(cp.x - 2, cp.y - 2),
+        Vector2i.new(cp.x - 1, cp.y - 2),
+        Vector2i.new(cp.x,     cp.y - 2),
+        Vector2i.new(cp.x + 1, cp.y - 2),
+        Vector2i.new(cp.x + 2, cp.y - 2)
+    }
 
-local function checkDrop()
-    local blockCount = getCount(Config.ITEM_ID, InventoryItemType.block)
+    local total = math.min(amount, CONFIG.MAX_BLOCKS)
 
-    if blockCount >= Config.MAX_AMOUNT then
-        dropItem(Config.ITEM_ID, InventoryItemType.block, blockCount)
+    for i = 1, total do
+        if not isOnline() then return end
+
+        local point = points[((i - 1) % #points) + 1]
+
+        client:place(point, CONFIG.TARGET_BLOCK, InventoryItemType.block)
+
+        for h = 1, CONFIG.MIN_HITS do
+            client:send("HB", {
+                x = point.x,
+                y = point.y
+            })
+        end
     end
-end
-
-local function scanZigZag(callback)
-    local world = client:world()
-    if not world then return end
-
-    local left = 1
-    local right = world.size.x - 2
-    local top = 1
-    local bottom = world.size.y - 2
-    local leftToRight = true
-
-    for y = top, bottom do
-        if leftToRight then
-            for x = left, right do
-                callback(world, x, y)
-            end
-        else
-            for x = right, left, -1 do
-                callback(world, x, y)
-            end
-        end
-
-        leftToRight = not leftToRight
-    end
-end
-
-local function harvestWorld()
-    scanZigZag(function(world, x, y)
-        checkDrop()
-
-        local treePos = Vector2i.new(x, y)
-        local tile = world:tile(treePos)
-
-        if not isHarvestable(tile) then
-            return
-        end
-
-        local myPos = client:point()
-        local dist = math.abs(myPos.x - x) + math.abs(myPos.y - y)
-
-        if dist > 2 then
-            if not pathTo(treePos) then
-                return
-            end
-        end
-
-        repeat
-            client:hit(treePos)
-            rsleep(Config.HIT_DELAY)
-
-            tile = world:tile(treePos)
-        until not tile or tile.foreground == 0
-
-        collectNearby(treePos)
-        checkDrop()
-
-        rsleep(Config.TREE_DELAY)
-    end)
-end
-
-local function plantWorld()
-    scanZigZag(function(world, x, y)
-        checkDrop()
-
-        if getCount(Config.ITEM_ID, InventoryItemType.seed) <= 0 then
-            if not collectSeed() then
-                return
-            end
-        end
-
-        local pos = Vector2i.new(x, y)
-        local tile = world:tile(pos)
-        local below = world:tile(Vector2i.new(x, y + 1))
-
-        if tile and tile.foreground == 0 and isSolid(below) then
-            if pathTo(pos) then
-                client:place(
-                    pos,
-                    Config.ITEM_ID,
-                    InventoryItemType.seed
-                )
-
-                rsleep(Config.PLANT_DELAY)
-            end
-        end
-    end)
 end
 
 runThread(function()
-    joinWorld()
+    warpNormal()
 
     while true do
-        if not client:world() then
-            joinWorld()
+        if not isOnline() then
+            warpNormal()
         end
 
-        checkDrop()
+        local amount = client:inventory():count(CONFIG.TARGET_BLOCK, InventoryItemType.block)
 
-        if Config.MODE == "HT" then
-            harvestWorld()
+        -- ✅ Kalau block kosong atau di bawah MIN_STOCK, refill dulu
+        if amount < CONFIG.MIN_STOCK then
+            refillBlock()
+        else
+            if not inWorld() then
+                warpNormal()
+            end
 
-        elseif Config.MODE == "PLANT" then
-            plantWorld()
-
-        elseif Config.MODE == "BOTH" then
-            harvestWorld()
-            plantWorld()
+            pnb()
         end
 
-        rsleep(Config.LOOP_DELAY)
+        sleep(CONFIG.LOOP_DELAY)
     end
 end)
